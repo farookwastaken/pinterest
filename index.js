@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const { fetchMemeImages } = require('./scraper');
+const { getRandomImage } = require('./scraper');
 
 const client = new Client({
   intents: [
@@ -18,13 +18,7 @@ client.on('messageCreate', async (message) => {
   if (message.content.trim().toLowerCase() !== '!meme') return;
 
   try {
-    const images = await fetchMemeImages();
-
-    if (!images || images.length === 0) {
-      return message.reply('Could not find any memes right now. Try again later!');
-    }
-
-    const randomImage = images[Math.floor(Math.random() * images.length)];
+    const randomImage = await getRandomImage();
 
     const embed = new EmbedBuilder()
       .setColor(0xe60023) // Pinterest red
