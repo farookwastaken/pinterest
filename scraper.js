@@ -1,50 +1,54 @@
 const fetch = require('node-fetch');
 
-const PINTEREST_SEARCH_URL = 'https://www.pinterest.com/resource/BaseSearchResource/get/';
+const PINTEREST_API_URL = 'https://api.pinterest.com/v5/pins/search';
 
 const SEARCH_QUERIES = ['funny memes', 'dank memes', 'hilarious memes', 'memes 2024'];
 
+const IMAGE_SIZES = ['1200x', '736x', '600x', '400x'];
+
+/** @type {Array<{ url: string, pinUrl: string }>} */
+const imageQueue = [];
+
+const MIN_QUEUE_SIZE = 10;
+
 /**
- * Builds the Pinterest search API query string.
- * @param {string} query - Search term
- * @returns {string} Full URL with query params
+ * Extracts the best available image URL from a pin's media object.
+ * Tries each preferred size in order, falling back to the next.
+ * @param {object} pin
+ * @returns {string|null}
  */
-function buildSearchUrl(query) {
-  const data = {
-    options: {
-      query,
-      scope: 'pins',
-      page_size: 25,
-      bookmarks: [],
-    },
-    context: {},
-  };
+function extractImageUrl(pin) {
+  const images = pin?.media?.images;
+  if (!images) return null;
 
-  const params = new URLSearchParams({
-    source_url: `/search/pins/?q=${encodeURIComponent(query)}`,
-    data: JSON.stringify(data),
-  });
+  for (const size of IMAGE_SIZES) {
+    if (images[size]?.url) return images[size].url;
+  }
 
-  return `${PINTEREST_SEARCH_URL}?${params.toString()}`;
+  return null;
 }
 
 /**
- * Fetches meme image results from Pinterest's internal search API.
- * Returns an array of objects with { url, pinUrl }.
+ * Fetches a batch of meme images from the Pinterest v5 API and
+ * pushes them into the shared queue.
  */
-async function fetchMemeImages() {
-  const query = SEARCH_QUERIES[Math.floor(Math.random() * SEARCH_QUERIES.length)];
-  const url = buildSearchUrl(query);
+async function refillQueue() {
+  const token = process.env.PINTEREST_TOKEN;
+  if (!token) {
+    throw new Error('Missing PINTEREST_TOKEN environment variable.');
+  }
 
-  const response = await fetch(url, {
+  const query = SEARCH_QUERIES[Math.floor(Math.random() * SEARCH_QUERIES.length)];
+
+  const params = new URLSearchParams({
+    query,
+    page_size: '25',
+  });
+
+  const response = await fetch(`${PINTEREST_API_URL}?${params.toString()}`, {
     headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'application/json, text/javascript, */*, q=0.01',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'X-Requested-With': 'XMLHttpRequest',
-      'Referer': 'https://www.pinterest.com/',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
     },
   });
 
@@ -53,24 +57,40 @@ async function fetchMemeImages() {
   }
 
   const json = await response.json();
-
-  const pins =
-    json?.resource_response?.data?.results ||
-    json?.resource_response?.data ||
-    [];
+  const pins = json?.items ?? [];
 
   if (!Array.isArray(pins) || pins.length === 0) {
     throw new Error('No pins returned from Pinterest API');
   }
 
-  const images = pins
-    .filter((pin) => pin?.images?.orig?.url || pin?.images?.['736x']?.url)
-    .map((pin) => ({
-      url: pin.images?.orig?.url || pin.images?.['736x']?.url,
-      pinUrl: pin.id ? `https://www.pinterest.com/pin/${pin.id}/` : null,
-    }));
+  for (const pin of pins) {
+    const url = extractImageUrl(pin);
+    if (!url) continue;
 
-  return images;
+    imageQueue.push({
+      url,
+      pinUrl: pin.id ? `https://www.pinterest.com/pin/${pin.id}/` : null,
+    });
+  }
 }
 
-module.exports = { fetchMemeImages };
+/**
+ * Returns a random image from the queue, refilling it first if it
+ * has fewer than MIN_QUEUE_SIZE entries.
+ * @returns {Promise<{ url: string, pinUrl: string|null }>}
+ */
+async function getRandomImage() {
+  if (imageQueue.length < MIN_QUEUE_SIZE) {
+    await refillQueue();
+  }
+
+  if (imageQueue.length === 0) {
+    throw new Error('Image queue is empty after refill attempt.');
+  }
+
+  const index = Math.floor(Math.random() * imageQueue.length);
+  const [image] = imageQueue.splice(index, 1);
+  return image;
+}
+
+module.exports = { getRandomImage };
